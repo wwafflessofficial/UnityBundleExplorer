@@ -1,4 +1,3 @@
-```yaml
 name: Build Unity Bundle Explorer APK
 
 on:
@@ -6,12 +5,15 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download repository files
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Java
@@ -23,6 +25,10 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Android SDK
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -30,35 +36,48 @@ jobs:
 
       - name: Extract project archive
         run: |
-          mkdir extracted
-          found=false
+          mkdir -p extracted
 
-          for file in *.zip; do
-            if [ -f "$file" ]; then
-              unzip -o "$file" -d extracted
-              found=true
-            fi
-          done
+          find . -maxdepth 3 -type f \
+            \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.tar' \) \
+            ! -path './.git/*' \
+            -print
 
-          if [ "$found" = false ]; then
-            echo "No ZIP archive found in repository root."
+          ARCHIVE=$(find . -maxdepth 3 -type f \
+            \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.tar' \) \
+            ! -path './.git/*' | head -n 1)
+
+          if [ -z "$ARCHIVE" ]; then
+            echo "No project archive found."
             exit 1
           fi
+
+          case "$ARCHIVE" in
+            *.zip) unzip -o "$ARCHIVE" -d extracted ;;
+            *.tar.gz) tar -xzf "$ARCHIVE" -C extracted ;;
+            *.tar) tar -xf "$ARCHIVE" -C extracted ;;
+          esac
+
+      - name: Find Android project
+        id: project
+        run: |
+          FILE=$(find extracted -name settings.gradle -print -quit)
+
+          if [ -z "$FILE" ]; then
+            echo "settings.gradle not found."
+            exit 1
+          fi
+
+          echo "dir=$(dirname "$FILE")" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
         run: |
-          PROJECT_DIR=$(find extracted -name settings.gradle -print -quit | xargs dirname)
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "Could not find settings.gradle in extracted project."
-            exit 1
-          fi
-          cd "$PROJECT_DIR"
+          cd "${{ steps.project.outputs.dir }}"
           gradle --no-daemon assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: UnityBundleExplorer-APK
-          path: extracted/**/app/build/outputs/apk/debug/app-debug.apk
+          path: extracted/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-```
